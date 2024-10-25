@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import functools
 import string
 from collections import namedtuple
 from typing import TYPE_CHECKING
@@ -362,53 +363,19 @@ class PackageURL(
         qualifiers: Optional[Union[AnyStr, Dict[str, str]]] = None,
         subpath: Optional[AnyStr] = None,
     ) -> Self:
-        required = dict(type=type, name=name)
-        for key, value in required.items():
-            if value:
-                continue
-            raise ValueError(f"Invalid purl: {key} is a required argument.")
+        # Arguments to a function decorated with `functools.lru_cache` must be hashable.
+        # Convert qualifiers to string before instantiating to prevent an exception.
+        # Final qualifiers type will always be `dict`.
+        if isinstance(qualifiers, dict):
+            qualifiers = "&".join(f"{key}={value}" for key, value in qualifiers.items())
 
-        strings = dict(
-            type=type,
+        return _new_packageurl(
+            type_=type,
             namespace=namespace,
             name=name,
             version=version,
+            qualifiers=qualifiers,
             subpath=subpath,
-        )
-
-        for key, value in strings.items():
-            if value and isinstance(value, basestring) or not value:
-                continue
-            raise ValueError(f"Invalid purl: {key} argument must be a string: {repr(value)}.")
-
-        if qualifiers and not isinstance(
-            qualifiers,
-            (
-                basestring,
-                dict,
-            ),
-        ):
-            raise ValueError(
-                f"Invalid purl: qualifiers argument must be a dict or a string: {repr(qualifiers)}."
-            )
-
-        (
-            type_norm,
-            namespace_norm,
-            name_norm,
-            version_norm,
-            qualifiers_norm,
-            subpath_norm,
-        ) = normalize(type, namespace, name, version, qualifiers, subpath, encode=None)
-
-        return super().__new__(
-            cls,
-            type=type_norm,
-            namespace=namespace_norm,
-            name=name_norm,
-            version=version_norm,
-            qualifiers=qualifiers_norm,
-            subpath=subpath_norm,
         )
 
     def __str__(self, *args: Any, **kwargs: Any) -> str:
@@ -545,3 +512,34 @@ class PackageURL(
         )
 
         return cls(type, namespace, name, version, qualifiers, subpath)
+
+
+@functools.lru_cache(maxsize=None)
+def _new_packageurl(
+    type_: Optional[AnyStr] = None,
+    namespace: Optional[AnyStr] = None,
+    name: Optional[AnyStr] = None,
+    version: Optional[AnyStr] = None,
+    qualifiers: Optional[AnyStr] = None,
+    subpath: Optional[AnyStr] = None,
+) -> PackageURL:
+    for arg in "type_", "name":
+        if not locals().get(arg):
+            raise ValueError(f"Invalid purl: {arg} is a required argument.")
+
+    for arg in ["type_", "namespace", "name", "version", "subpath"]:
+        if not isinstance(value := locals().get(arg), (str, bytes, type(None))):
+            raise ValueError(
+                f'Invalid purl: "{arg}" argument must be a string. '
+                f"Got: {value!r} ({type(value).__name__})."
+            )
+
+    if qualifiers and not isinstance(qualifiers, (str, bytes, dict)):
+        raise ValueError(
+            f'Invalid purl: "qualifiers" argument must be a dict or a string. '
+            f"Got {qualifiers!r} ({type(qualifiers).__name__})."
+        )
+
+    normalized = normalize(type_, namespace, name, version, qualifiers, subpath, encode=None)
+
+    return tuple.__new__(PackageURL, normalized)
